@@ -20,6 +20,53 @@ use File::Spec;
 
 use vars qw( %COMPAT );
 
+# HACK FOR PERFORMANCE
+# Crypt::DSA::Util prefers /dev/random which can be slow sometimes. Let's try
+# /dev/urandom if it's available to speed things up.
+# Lame but it works...
+{
+    use Carp;
+    use Fcntl;
+    use Crypt::DSA::Util;
+    no warnings 'redefine';
+
+    sub Crypt::DSA::Util::makerandom {
+        warn "Using hacked version of Crypt::DSA::Util::makerandom\n";
+        my %param = @_;
+        my $size = $param{Size};
+        my $bytes = int($size / 8) + 1;
+        my $r = '';
+
+        my $dev_rand = '/dev/random';
+        if (-r '/dev/urandom') {
+            $dev_rand = '/dev/urandom';
+        }
+
+        if ( sysopen my $fh, $dev_rand, O_RDONLY ) {
+            my $read = 0;
+            while ($read < $bytes) {
+                my $got = sysread $fh, my($chunk), $bytes - $read;
+                next unless $got;
+                die "Error: $!" if $got == -1;
+                $r .= $chunk;
+                $read = length $r;
+            }
+            close $fh;
+        }
+        elsif ( require Data::Random ) {
+            $r .= Data::Random::rand_chars( set=>'numeric' ) for 1..$bytes;
+        }
+        else {
+            croak "makerandom requires $dev_rand or Data::Random";
+        }
+        my $down = $size - 1;
+        $r = unpack 'H*', pack 'B*', '0' x ( $size % 8 ? 8 - $size % 8 : 0 ) .
+            '1' . unpack "b$down", $r;
+        Math::BigInt->new('0x' . $r);
+    }
+}
+# /HACK
+
 ## pgp2 and pgp5 do not trim trailing whitespace from "canonical text"
 ## signatures, only from cleartext signatures.
 ## See:

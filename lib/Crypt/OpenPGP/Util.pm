@@ -102,6 +102,29 @@ sub _ensure_bigint {
 sub get_random_bytes {
 	my $length = shift;
 	if (eval 'require Crypt::Random; 1;') {
+        # HACK FOR PERFORMANCE
+        # In Crypt::Random::Seed::new dev_random is tried before dev_urandom,
+        # so let's override that method to check urandom first and then fall
+        # back on dev_random.
+        # Lame but it works...
+        {
+            no warnings 'redefine';
+
+            use Crypt::Random::Seed;
+
+            sub Crypt::Random::Seed::_try_dev_random {
+                warn "Using hacked version of Crypt::Random::Seed::_try_dev_random\n";
+                if (-r "/dev/urandom") {
+                    return ('/dev/urandom', sub { Crypt::Random::Seed::__read_file('/dev/urandom', @_); }, 0, 0);
+                }
+                elsif (-r "/dev/random") {
+                    my $blocking = ($^O eq 'freebsd') ? 0 : 1;
+                    return ('/dev/random', sub { Crypt::Random::Seed::__read_file('/dev/random', @_); }, $blocking, 1);
+                }
+                return;
+            }
+        }
+        # /HACK
 		return Crypt::Random::makerandom_octet( Length => $length);
 	}
 	elsif (eval 'require Bytes::Random::Secure; 1;') {
